@@ -11,22 +11,21 @@ IEM（Income and Expenditure Management）是本地优先的个人收支应用�
 
 ---
 
-## 1. 本机环境（已核对过的路径）
+## 1. 配置和确认本机环境
 
-下面是这台电脑上实际在用的位置，换机器时请改成你的路径。
+请按照下列参考确认是否存在相关SDK。
 
 | 项 | 路径 / 说明 |
 |---|---|
-| 项目目录 | `D:\Code\CodeProject\IEM\IEM` |
-| JDK 17 | `D:\CodeSDK\Java\JDK` |
-| Android SDK | `D:\CodeSDK\Android\Sdk` |
-| NDK | `D:\CodeSDK\Android\Sdk\ndk\30.0.15729638` |
-| Android Studio | `D:\CodeSoftWare\Android Studio\Android Studio` |
+| JDK (建议17+) | `Java安装目录\JDK` |
+| Android SDK | `Android SDK安装目录` |
+| NDK | `AndroidSDK安装目录\ndk\30.0.15729638` |
+| Android Studio | `Android Studio安装目录` |
 | Rust | `stable-x86_64-pc-windows-msvc`（`rustc` 1.97+） |
 
 系统环境变量（在「系统变量」里，不是用户变量）：
 
-```
+``` 示例路径
 JAVA_HOME=D:\CodeSDK\Java\JDK
 ANDROID_HOME=D:\CodeSDK\Android\Sdk
 ANDROID_SDK_ROOT=D:\CodeSDK\Android\Sdk
@@ -40,7 +39,7 @@ ANDROID_SDK_ROOT=D:\CodeSDK\Android\Sdk
 
 **不必**再设 `ANDROID_NDK_HOME`。NDK 装在 SDK 的 `ndk` 目录下即可。
 
-改过环境变量后必须**关掉并重开** Cursor / 终端，旧窗口读不到新变量。
+改过环境变量后必须**关掉并重开** 终端，旧窗口读不到新变量。
 
 检查：
 
@@ -61,7 +60,7 @@ rustup target list --installed
 - Cargo：`.cargo/config.toml` → [rsproxy](https://rsproxy.cn/)
 
 ```powershell
-cd D:\Code\CodeProject\IEM\IEM
+cd IEM根目录
 npm install
 ```
 
@@ -70,7 +69,7 @@ npm install
 ## 2. 网页版
 
 ```powershell（在项目根目录）
-cd D:\Code\CodeProject\IEM\IEM
+cd IEM根目录
 npm run dev
 ```
 
@@ -146,7 +145,7 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 在**项目根目录**：
 
 ```powershell
-cd D:\Code\CodeProject\IEM\IEM
+cd IEM根目录
 npx tauri android init
 ```
 
@@ -175,7 +174,7 @@ adb devices
 仍在**项目根目录终端**（不要开 Android Studio 再点 Run）：
 
 ```powershell
-cd D:\Code\CodeProject\IEM\IEM
+cd IEM根目录
 npx tauri android dev
 ```
 
@@ -186,7 +185,7 @@ npx tauri android dev
 同样在**项目根目录终端**：
 
 ```powershell
-cd D:\Code\CodeProject\IEM\IEM
+cd IEM根目录
 npx tauri android build
 ```
 
@@ -203,7 +202,7 @@ npx tauri android build
 在资源管理器地址栏粘贴：
 
 ```text
-D:\Code\CodeProject\IEM\IEM\src-tauri\gen\android\app\build\outputs\apk\universal\release
+IEM根目录\src-tauri\gen\android\app\build\outputs\apk\universal\release
 ```
 
 或在项目根目录搜索 `*.apk`。
@@ -213,7 +212,7 @@ D:\Code\CodeProject\IEM\IEM\src-tauri\gen\android\app\build\outputs\apk\universa
 本次已签好的安装包（约 23MB）：
 
 ```text
-D:\Code\CodeProject\IEM\IEM\dist-android\IEM.apk
+IEM根目录\dist-android\IEM.apk
 ```
 
 用数据线拷到手机后安装；不要走微信/QQ 传文件（容易损坏或改后缀）。手机需允许「安装未知来源应用」。
@@ -227,7 +226,7 @@ npm run android:sign
 连着电脑时也可以：
 
 ```powershell
-adb install -r "D:\Code\CodeProject\IEM\IEM\dist-android\IEM.apk"
+adb install -r "IEM根目录\dist-android\IEM.apk"
 ```
 
 调试包（自带 debug 签名，不必再签）：
@@ -252,11 +251,11 @@ You should use developer mode.
 
 1. `Win + I` → **系统** → **开发者选项**（或设置搜索「开发人员」）
 2. 打开 **开发人员模式**（Developer Mode），同意提示
-3. **关掉并重开** Cursor / 终端（必要时重启一次 Windows）
+3. **关掉并重开** 终端（必要时重启一次 Windows）
 4. 再执行：
 
 ```powershell
-cd D:\Code\CodeProject\IEM\IEM
+cd IEM根目录
 npx tauri android build
 ```
 
@@ -284,20 +283,18 @@ Could not configure services using BuildScopeServices.configure().
 ClassCastException: PlatformClassLoader cannot be cast to URLClassLoader
 ```
 
-`D:\CodeSDK\Java\JDK` 名义上是 **JDK 17**，但目录里还留着旧 **JDK 8** 的文件（`lib\tools.jar`、`jre\` 实际是 `1.8.0_221`）。Gradle 8 发现 `tools.jar` 就会走 Java 8 那套注入逻辑，在 JDK 17 上直接崩。
-
-这些残留已挪到 `D:\CodeSDK\Java\JDK8-leftover-backup`（未删除）。确认 `java -version` 仍是 `17.0.18` 后，旧工具若还要用 Java 8，去备份目录取，不要搬回 `JAVA_HOME`。
+安装的JDK 名义上是 **JDK 17**，但目录里还留着旧 **JDK 8** 的文件（`lib\tools.jar`、`jre\` 实际是 `1.8.0_221`）。Gradle 8 发现 `tools.jar` 就会走 Java 8 那套注入逻辑，在 JDK 17 上直接崩。建议删除所有旧文件重新安装JDK 17，JDK8如果需要建议安装在其他目录。
 
 **本工程已改用 Android Studio 自带 JDK**（`src-tauri/gen/android/gradle.properties` 里的 `org.gradle.java.home`）。若重新执行 `npx tauri android init` 冲掉了该文件，把下面这一行加回去：
 
 ```properties
-org.gradle.java.home=D:\\CodeSoftWare\\Android Studio\\Android Studio\\jbr
+org.gradle.java.home=Android Studio安装目录\\Android Studio\\jbr
 ```
 
 并确保存在 `src-tauri/gen/android/local.properties`（此文件不进 Git）：
 
 ```properties
-sdk.dir=D:\\CodeSDK\\Android\\Sdk
+sdk.dir=Android SDK安装目录\\Sdk
 ```
 
 长期建议：JDK 17 装到空目录，不要覆盖旧 JDK 8 文件夹。残留已隔离后，`JAVA_HOME` 可以继续给网页/桌面用；Android Gradle 仍优先走上面的 `org.gradle.java.home`。
@@ -345,7 +342,7 @@ npx tauri ios build
 ## 6. 常用命令速查
 
 ```powershell
-cd D:\Code\CodeProject\IEM\IEM
+cd IEM根目录
 
 npm install
 npm run dev                 # 网页 http://127.0.0.1:1420
