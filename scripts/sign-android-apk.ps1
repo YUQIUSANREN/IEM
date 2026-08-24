@@ -3,7 +3,14 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $sdk = $env:ANDROID_HOME
-if (-not $sdk) { $sdk = "D:\CodeSDK\Android\Sdk" }
+if (-not $sdk) {
+  # $sdk = "Android SDK安装目录" 
+  Write-Host "`n[提示] 环境变量 ANDROID_HOME 未设置。" -ForegroundColor Yellow
+  $sdk = Read-Host "请输入你的 Android SDK 根目录路径 (例如 D:\Android\Sdk)"
+  if (-not (Test-Path $sdk)) {
+      throw "SDK 路径 '$sdk' 不存在，请检查后重试。"
+  }
+}
 $bt = Join-Path $sdk "build-tools\35.0.0"
 if (-not (Test-Path (Join-Path $bt "apksigner.bat"))) {
   $bt = Join-Path $sdk "build-tools\34.0.0"
