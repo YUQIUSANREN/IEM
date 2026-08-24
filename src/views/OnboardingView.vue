@@ -2,17 +2,19 @@
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
-import { GUIDE_STEPS } from '../guides/content'
+import { guideStepsForClient } from '../guides/content'
 import { saveBudget } from '../domain/engine'
 import { parseYuanInput } from '../domain/money'
 import PeriodStartDayPicker from '../components/PeriodStartDayPicker.vue'
 import { notifyError, toast } from '../ui/toast'
+import { promptChangelogIfNeeded } from '../ui/changelog'
+import { isMobileApp } from '../platform/env'
 
 const store = useAppStore()
 const router = useRouter()
 const index = ref(0)
 const budget = reactive({ startDay: 16, total: '' })
-const steps = [...GUIDE_STEPS]
+const steps = [...guideStepsForClient(isMobileApp())]
 const current = computed(() => steps[Math.min(index.value, steps.length - 1)])
 const last = computed(() => index.value === steps.length)
 
@@ -24,7 +26,7 @@ function prev(): void {
   if (index.value > 0) index.value -= 1
 }
 
-function finish(): void {
+async function finish(): Promise<void> {
   const total = parseYuanInput(budget.total)
   if (budget.total.trim() && (total === null || total <= 0)) {
     toast('error', '限额金额无效，可留空跳过')
@@ -38,7 +40,8 @@ function finish(): void {
     return
   }
   toast('ok', total && total > 0 ? '限额已保存，已进入账本' : '已进入账本')
-  void router.replace('/')
+  await router.replace('/')
+  window.setTimeout(() => promptChangelogIfNeeded(), 400)
 }
 </script>
 

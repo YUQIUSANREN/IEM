@@ -24,6 +24,7 @@
     "allow-drain-notify-queue",
     "allow-notification-listener-enabled",
     "allow-open-notification-listener-settings",
+    "allow-ocr-recognize",
     {
       "identifier": "fs:scope",
       "allow": [

@@ -6,10 +6,13 @@ import TxForm from './components/TxForm.vue'
 import CategoryManage from './components/CategoryManage.vue'
 import ToastHost from './components/ToastHost.vue'
 import ConfirmHost from './components/ConfirmHost.vue'
+import CalibrateBalance from './components/CalibrateBalance.vue'
+import ChangelogHost from './components/ChangelogHost.vue'
 import { drainNotifyQueue } from './platform/notify-listener'
 import { isMobileApp } from './platform/env'
 import { onPersistError } from './db/client'
 import { notifyError } from './ui/toast'
+import { promptChangelogIfNeeded } from './ui/changelog'
 import { useRecordHistory } from './composables/useRecordHistory'
 import { useSheetHistory } from './composables/useSheetHistory'
 
@@ -32,6 +35,9 @@ onMounted(async () => {
     }
     if (store.onboarded && route.path === '/onboarding') {
       await router.replace('/')
+    }
+    if (store.onboarded) {
+      promptChangelogIfNeeded()
     }
     if (isMobileApp()) {
       pollTimer = window.setInterval(() => {
@@ -72,8 +78,10 @@ function onRecordSaved(keepOpen = false): void {
       <CategoryManage @close="closeCategoriesView" />
     </div>
   </div>
+  <CalibrateBalance />
   <ToastHost />
   <ConfirmHost />
+  <ChangelogHost />
 </template>
 
 <style scoped>

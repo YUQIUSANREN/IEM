@@ -162,7 +162,6 @@ export function guessCategoryId(
     { kind: 'expense', name: '通讯', keys: ['话费', '电信', '移动', '联通', '宽带'] },
     { kind: 'expense', name: '订阅', keys: ['自动续费', 'iCloud', '爱奇艺', '腾讯视频', 'Netflix'] },
     { kind: 'income', name: '工资', keys: ['工资', '薪资', 'payroll'] },
-    { kind: 'income', name: '退款', keys: ['退款'] },
   ]
   for (const rule of rules) {
     if (rule.kind !== kind) continue

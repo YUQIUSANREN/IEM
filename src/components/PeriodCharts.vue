@@ -79,7 +79,9 @@ function isCoarsePointer(): boolean {
 
 function openDayAt(index: number, days: string[]): void {
   const date = days[index]
-  if (date) emit('openDay', date)
+  if (!date) return
+  if (!store.transactions.some((tx) => tx.occurredAt.slice(0, 10) === date)) return
+  emit('openDay', date)
 }
 
 function onBarPointer(index: number, days: string[]): void {
@@ -410,7 +412,7 @@ watch(
 </script>
 
 <template>
-  <article class="card">
+  <article id="report-share" class="card">
     <h2>分类占比</h2>
     <p v-if="!slices.length" class="muted">这个区间还没有支出。</p>
     <div v-else-if="compare" class="pie-key" aria-label="饼图图例">
@@ -471,7 +473,7 @@ watch(
     </ol>
   </article>
 
-  <article class="card">
+  <article id="report-trend" class="card">
     <h2>每日支出走势</h2>
     <div ref="lineEl" class="chart" />
   </article>

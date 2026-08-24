@@ -84,6 +84,7 @@ function migrate(): void {
   }
   ensureTransferCategories()
   ensureRefundColumn()
+  dropUnusedIncomeRefundCategory()
 }
 
 function tableHasColumn(table: string, column: string): boolean {
@@ -124,6 +125,27 @@ function ensureRefundColumn(): void {
     }
   }
   setMeta('refund_tx_migrated', '1')
+}
+
+/**
+ * 退款改为支出冲减后，收入侧默认「退款」分类不再需要。
+ * 已有流水占用时保留，避免把旧数据改成未分类。
+ */
+function dropUnusedIncomeRefundCategory(): void {
+  const row = queryOne<{ id: number }>(
+    `SELECT id FROM categories WHERE name = ? AND kind = ?`,
+    ['退款', 'income'],
+  )
+  if (!row) return
+  const used =
+    queryValue<number>(
+      'SELECT COUNT(*) AS c FROM transactions WHERE category_id = ?',
+      [row.id],
+      'c',
+    ) ?? 0
+  if (used > 0) return
+  run('DELETE FROM category_budget_policies WHERE category_id = ?', [row.id])
+  run('DELETE FROM categories WHERE id = ?', [row.id])
 }
 
 /** 旧账本没有「其他」分类时补上，记一笔第三栏用。 */

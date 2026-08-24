@@ -2013,6 +2013,12 @@
           "markdownDescription": "查询系统通知使用权是否已授予 IEM"
         },
         {
+          "description": "用系统 OCR 从账单截图识别文字",
+          "type": "string",
+          "const": "allow-ocr-recognize",
+          "markdownDescription": "用系统 OCR 从账单截图识别文字"
+        },
+        {
           "description": "打开系统通知使用权设置页",
           "type": "string",
           "const": "allow-open-notification-listener-settings",

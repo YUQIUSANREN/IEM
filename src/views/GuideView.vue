@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { GUIDE_STEPS } from '../guides/content'
+import { guideStepsForClient } from '../guides/content'
+import { isMobileApp } from '../platform/env'
 
 const route = useRoute()
 const router = useRouter()
+const steps = guideStepsForClient(isMobileApp())
 
 /**
  * 从导入页「导出指引」进来时，滚到对应卡片。
@@ -27,9 +29,8 @@ watch(() => route.query.step, scrollToStep)
       <h1>使用指南</h1>
       <button class="btn ghost" @click="router.push('/settings')">返回设置</button>
     </header>
-    <p class="muted">完整说明也写在项目根目录的 GUIDE.md，可随时对照。</p>
     <article
-      v-for="step in GUIDE_STEPS"
+      v-for="step in steps"
       :id="`guide-${step.id}`"
       :key="step.id"
       class="card guide-card"

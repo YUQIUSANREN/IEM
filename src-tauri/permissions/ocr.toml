@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-ocr-recognize"
+description = "用系统 OCR 从账单截图识别文字"
+commands.allow = ["ocr_recognize"]

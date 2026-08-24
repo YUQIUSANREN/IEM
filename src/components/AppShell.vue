@@ -85,7 +85,24 @@ onUnmounted(() => stopCompact?.())
         <span>{{ item.label }}</span>
       </button>
     </nav>
-    <button v-if="route.path !== '/lab'" class="fab" title="记一笔" @click="store.openRecord()">+</button>
+    <button
+      v-if="route.path !== '/lab'"
+      class="fab"
+      type="button"
+      title="记一笔"
+      aria-label="记一笔"
+      @click="store.openRecord()"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M12 5v14M5 12h14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.4"
+          stroke-linecap="round"
+        />
+      </svg>
+    </button>
   </div>
 </template>
 
@@ -123,6 +140,10 @@ onUnmounted(() => stopCompact?.())
 .nav-btn.active { background: var(--moss); color: var(--btn-on); }
 .fab {
   position: absolute;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  line-height: 0;
 }
 .main {
   --main-pad-top: 60px;
@@ -176,6 +197,7 @@ onUnmounted(() => stopCompact?.())
 .compact .bottom .active { color: var(--moss); font-weight: 700; }
 .compact .fab {
   right: max(20px, env(safe-area-inset-right));
-  bottom: calc(22px + 64px + env(safe-area-inset-bottom));
+  /* 40px 空隙对底栏；+10px 底栏下边距，避免实际空隙比字高大不了多少 */
+  bottom: calc(40px + 64px + 10px + env(safe-area-inset-bottom));
 }
 </style>

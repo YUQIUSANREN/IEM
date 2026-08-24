@@ -24,6 +24,10 @@ const options = computed(() => {
     value: item.startIso,
     label: `${item.label}${item.startIso === liveStart ? '（本周期）' : ''}`,
   }))
+  if (props.modelValue && props.modelValue !== 'custom' && !items.some((item) => item.value === props.modelValue)) {
+    const extra = getPeriodByDate(new Date(props.modelValue), startDay)
+    items.unshift({ value: extra.startIso, label: extra.label })
+  }
   return props.allowCustom ? [{ value: 'custom', label: '自定义区间' }, ...items] : items
 })
 </script>

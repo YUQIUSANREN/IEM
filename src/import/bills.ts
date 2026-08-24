@@ -194,26 +194,37 @@ export interface ParsedNotification {
   excludedFromBudget: boolean
   orderNo: string
   categoryHint: string
-  /** 账单详情上的关联退款，入账时另记一笔收入；没有则为 0。 */
+  /** 账单详情上的关联退款，入账时另记一笔支出冲减；没有则为 0。 */
   relatedRefundFen: number
+  /** 本笔就是退款（支付宝退款成功页、短句「张三退款2元」），不是付款附带的已退款。 */
+  isRefund: boolean
 }
 
 function sourceFromPackage(packageName: string, text: string): TxSource {
   if (/alipay/i.test(packageName) || /支付宝|Alipay|收款方全称|商家订单号|账单分类/.test(text)) {
     return 'alipay'
   }
-  if (/tencent\.mm/i.test(packageName) || /微信|WeChat/i.test(text)) return 'wechat'
+  if (/tencent\.mm/i.test(packageName) || /微信|WeChat|财付通|微信支付/i.test(text)) return 'wechat'
   if (/icbc/i.test(packageName) || /工商|工行|ICBC/i.test(text)) return 'icbc'
   return 'notification'
 }
 
 /**
- * 粘贴入口会把标题写成「粘贴的通知」，拼进正文会污染第一行商户名。
+ * 入口占位标题，不是商家名。拼进正文或当作对方都会污染解析。
+ */
+const PLACEHOLDER_INBOX_TITLES = new Set(['粘贴的通知', '系统通知', 'OCR识图'])
+
+export function isPlaceholderInboxTitle(title: string): boolean {
+  return PLACEHOLDER_INBOX_TITLES.has(title.trim())
+}
+
+/**
+ * 粘贴 / OCR 的标题只表示来源，不要拼进正文当第一行商户名。
  */
 export function composeNotifyText(title: string, body: string): string {
   const heading = title.trim()
   const content = body.trim()
-  if (!heading || heading === '粘贴的通知' || heading === '系统通知') return content
+  if (!heading || isPlaceholderInboxTitle(heading)) return content
   if (!content) return heading
   return `${heading}\n${content}`
 }
@@ -248,6 +259,13 @@ function stampOnDay(day: Date, hms: string): string {
  * 正文里若有日期/时间则用它，否则退回通知到达（或粘贴）时刻。
  */
 function parseNotifyTime(text: string, postedAt: Date): string {
+  const cn = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}:\d{2}(?::\d{2})?)?/)
+  if (cn?.[1] && cn[2] && cn[3]) {
+    const parsed = parseFlexibleDate(
+      `${cn[1]}-${pad2(Number(cn[2]))}-${pad2(Number(cn[3]))}${cn[4] ? ` ${cn[4]}` : ''}`,
+    )
+    if (parsed) return toLocalIso(parsed)
+  }
   const full = text.match(/(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})[ T](\d{1,2}:\d{2}(?::\d{2})?)/)
   if (full?.[1] && full[2]) {
     const parsed = parseFlexibleDate(`${full[1].replace(/[/.]/g, '-')} ${full[2]}`)
@@ -275,54 +293,306 @@ function parseNotifyTime(text: string, postedAt: Date): string {
 }
 
 /**
- * 不计收支优先，避免「转入余额宝」被当成收入；收款/退款为收入，其余默认支出。
+ * 付款页上的「已退款」只是附注；独立退款页 / 短句才把本笔当退款。
+ */
+function isRefundSideNote(text: string): boolean {
+  return /已退款/.test(text) && /付款方式|支付时间|收款方|支付成功|付款成功/.test(text)
+}
+
+function isStandaloneRefundText(text: string): boolean {
+  if (isRefundSideNote(text)) return false
+  return (
+    /退款成功|退款到账|退款方式|查看原账单/.test(text) ||
+    /退款\s*[¥￥]?\d/.test(text) ||
+    /[\u4e00-\u9fffA-Za-z0-9_*]{1,20}退款\s*[¥￥]?\d/.test(text)
+  )
+}
+
+/**
+ * 不计收支优先，避免「转入余额宝」被当成收入；独立退款记支出冲减，收款为收入，其余默认支出。
  * 账单详情里「已退款」只是附注，有付款方式或负金额时仍按支出。
  */
 function parseNotifyType(
   text: string,
   amountSign: -1 | 0 | 1 = 0,
-): { type: TxType; excludedFromBudget: boolean } {
+): { type: TxType; excludedFromBudget: boolean; isRefund: boolean } {
   if (
     /不计收支|充值成功|提现成功|转入余额宝|转出到余额|余额宝-?(转入|转出)|零钱通.*(转入|转出)|基金.*(申购|赎回)|赎回成功|申购成功/.test(
       text,
     )
   ) {
-    return { type: 'transfer', excludedFromBudget: true }
+    return { type: 'transfer', excludedFromBudget: true, isRefund: false }
   }
-  if (amountSign < 0) return { type: 'expense', excludedFromBudget: false }
-  if (amountSign > 0) return { type: 'income', excludedFromBudget: false }
-  const refundIsSideNote = /已退款/.test(text) && /付款方式|支付时间|收款方/.test(text)
+  if (isStandaloneRefundText(text)) {
+    return { type: 'expense', excludedFromBudget: false, isRefund: true }
+  }
+  if (amountSign < 0) return { type: 'expense', excludedFromBudget: false, isRefund: false }
+  if (amountSign > 0) return { type: 'income', excludedFromBudget: false, isRefund: false }
   if (
-    /退款|收款成功|已收款|收到转账|收到一笔|你收款|入账成功/.test(text) &&
-    !/付款成功|已支付|支付成功/.test(text) &&
-    !refundIsSideNote
+    /收款成功|已收款|收到转账|收到一笔|你收款|入账成功/.test(text) &&
+    !/付款成功|已支付|支付成功/.test(text)
   ) {
-    return { type: 'income', excludedFromBudget: false }
+    return { type: 'income', excludedFromBudget: false, isRefund: false }
   }
   if (/付款|支付成功|已支付|消费|支出|转账成功|向.+付|支付凭证|零钱支付|使用.{0,8}支付/.test(text)) {
-    return { type: 'expense', excludedFromBudget: false }
+    return { type: 'expense', excludedFromBudget: false, isRefund: false }
   }
-  if (/收款|收到/.test(text)) return { type: 'income', excludedFromBudget: false }
-  return { type: 'expense', excludedFromBudget: false }
+  if (/收款|收到/.test(text)) return { type: 'income', excludedFromBudget: false, isRefund: false }
+  return { type: 'expense', excludedFromBudget: false, isRefund: false }
 }
 
 function cleanParty(raw: string): string {
-  return raw.replace(/(?:付款|转账|支付)?成功$/u, '').replace(/[，,。.\s]+$/u, '').trim()
+  return raw
+    .replace(/(?:付款|转账|支付)?成功$/u, '')
+    .replace(/退款成功$/u, '')
+    .replace(/退款\s*[¥￥]?\d+(?:\.\d{1,2})?\s*元?$/u, '')
+    .replace(/[，,。.\s]+$/u, '')
+    .trim()
 }
 
 function isBrandParty(party: string): boolean {
   return /^(支付宝|微信|微信支付|工行|工商银行)$/.test(party)
 }
 
+/**
+ * OCR 行框，坐标相对压缩后送去识字的图（不是屏幕）。
+ * 粘贴/通知没有图，传空即可。
+ */
+export interface OcrLayoutHint {
+  imageWidth: number
+  imageHeight: number
+  blocks: Array<{ text: string; x: number; y: number; w: number; h: number }>
+}
+
+function compactPartyKey(text: string): string {
+  return text.replace(/[|｜]/g, '').replace(/\s+/g, '').trim()
+}
+
+function textMentionsParty(text: string, party: string): boolean {
+  if (!party) return false
+  if (text.includes(party)) return true
+  return compactPartyKey(text).includes(compactPartyKey(party))
+}
+
+/** 页眉/底栏按钮。OCR 常把图标识成数字贴在前面，例如「8联系商家」。 */
+const CHROME_EXACT =
+  /^(关联记录|查看关联记录|查看原账单|查看往来记录|账单管理|账单详情|账单详倩|更多|更多v|标签|投诉|申请电子回单|对订单有疑问|联系商家|查看|账单|当前状态|支付成功|付款成功|退款成功|支付奖励|计入收支|备注|退款进度|提交银行处理|银行处理中|银行处理成功|AA收款|往来流水证明|住来流水证明)$/
+
+/** 返回箭头常被识成 く / <；底栏图标常被识成数字。时钟行不要剥小时，否则 6:34 会变成 :34。 */
+function stripNavPrefix(text: string): string {
+  const compact = compactPartyKey(text).replace(/^[く<＜‹〈]+/, '')
+  if (/^\d{1,2}:\d{2}/.test(compact)) return compact
+  const stripped = compact.replace(/^[0-9０-９④⑧园凹e]+/, '')
+  // 只在剥完变成已知按钮时才去掉前缀，避免「8号店」被改成「号店」。
+  if (stripped && CHROME_EXACT.test(stripped)) return stripped
+  return compact
+}
+
+/**
+ * 界面杂字、收单机构、卡号行不能当商家。
+ * 比标签规则宽一截，用来判断「对方」是不是误伤。
+ */
+function isRejectedLayoutParty(text: string): boolean {
+  const raw = compactPartyKey(text)
+  if (/^\d{1,2}:\d{2}/.test(raw)) return true
+  const t = stripNavPrefix(text)
+  if (t.length < 2 || t.length > 24) return true
+  if (!/[\u4e00-\u9fffA-Za-z*]/.test(t)) return true
+  if (parseEmbeddedAmount(t) || parseAmountLine(t)) return true
+  if (isLongDigitId(t)) return true
+  if (isChromeLine(t) || SKIP_PARTY_LINE.test(t) || isBrandParty(t) || BILL_FIELD_LABELS[t]) return true
+  if (/财付通|支付宝（中国）|银联|收单/.test(t)) return true
+  if (/银行.{0,8}卡|储蓄卡|信用卡|借记卡/.test(t)) return true
+  if (
+    /本服务由|对订单|留言|交易详情|账单详|账单管理|主页|当前状态|经营单号|交易单号|交易眼务|交易服务/.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/关联记录|支付奖励|计入收支|^备注$|请选择|立即领|开通记账本|共\d+件|文化休闲/.test(t)) {
+    return true
+  }
+  if (/查看原账单|退款进度|提交银行处理|银行处理中|银行处理成功/.test(t)) return true
+  if (/联系商家|往来记录|AA收款|流水证明/.test(t)) return true
+  if (/^退款[-—]?\d/.test(t)) return true
+  if (/^(天猫|天道|淘宝)$/.test(t)) return true
+  if (/KB\/s|^\d+(\.\d+)?$/.test(t)) return true
+  return false
+}
+
+function isWeakParty(party: string): boolean {
+  const t = party.trim()
+  if (!t) return true
+  return isRejectedLayoutParty(t) || isChromeLine(t) || SKIP_PARTY_LINE.test(t) || isBrandParty(t)
+}
+
+/** 正文里已有商户标签时，版式猜测不能覆盖标签抽出的全称。 */
+function hasPayeeLabel(text: string): boolean {
+  return /商户全称|商户名称|收款方全称|收款方名称/.test(text)
+}
+
+/** 执照全称，CSV「交易对方」通常是更短的店招。 */
+function isLegalPayeeName(name: string): boolean {
+  const t = name.trim()
+  return t.length >= 6 && /有限公司|股份有限|集团有限|合作社/.test(t)
+}
+
+/**
+ * 店招：短、不像公司全称、不是页眉按钮。
+ * 只有和全称同时出现时才用来替换对方，避免把「账单详情」抢成商家。
+ */
+function isStorefrontName(name: string, legalName: string): boolean {
+  const t = compactPartyKey(name)
+  if (!t || t === compactPartyKey(legalName)) return false
+  if (isLegalPayeeName(t)) return false
+  if (isRejectedLayoutParty(t) || isChromeLine(t) || SKIP_PARTY_LINE.test(t) || isBrandParty(t)) {
+    return false
+  }
+  if ((t.match(/[\u4e00-\u9fff]/g) ?? []).length < 2) return false
+  return t.length >= 2 && t.length <= 12
+}
+
+/** OCR 常把「收款方全称」的下一行挤成账单管理，执照全称落在后面。 */
+function findLegalPayeeInLines(lines: string[]): string {
+  for (const line of lines) {
+    const party = cleanParty(line).slice(0, 40)
+    if (isLegalPayeeName(party)) return party
+  }
+  return ''
+}
+
+function findStorefrontAlias(lines: string[], legalName: string, skipValues: string[]): string {
+  const skip = new Set(skipValues.map((item) => compactPartyKey(item)).filter(Boolean))
+  const found: string[] = []
+  for (const line of lines) {
+    const party = cleanParty(line).slice(0, 40)
+    if (!party || skip.has(compactPartyKey(party))) continue
+    if (
+      isChromeLine(line) ||
+      parseEmbeddedAmount(line) ||
+      isLongDigitId(line) ||
+      BILL_FIELD_LABELS[line.trim()] ||
+      SKIP_PARTY_LINE.test(line.trim())
+    ) {
+      continue
+    }
+    if (isStorefrontName(party, legalName)) found.push(party)
+  }
+  // OCR 常把底栏按钮倒到店招前面；真正店名会出现两次。
+  const counts = new Map<string, number>()
+  for (const party of found) {
+    const key = compactPartyKey(party)
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  const duplicated = [...counts.entries()].find(([, count]) => count >= 2)?.[0]
+  if (duplicated) {
+    return found.find((party) => compactPartyKey(party) === duplicated) ?? duplicated
+  }
+  return found[0] ?? ''
+}
+
+function noteWithLegalName(note: string, legalName: string): string {
+  const extra = `全称${legalName}`
+  if (!legalName || note.includes(legalName)) return note.slice(0, 80)
+  return [note, extra].filter(Boolean).join('；').slice(0, 80)
+}
+
+/**
+ * 付款成功卡：店名紧挨大金额上方；页眉「账单详情」也在金额上方，但不能当对方。
+ * 只在没有商户标签、或标签没抽出对方时使用。
+ */
+export function guessPartyFromOcrLayout(layout: OcrLayoutHint | null | undefined): string {
+  const width = layout?.imageWidth ?? 0
+  const height = layout?.imageHeight ?? 0
+  const rawBlocks = layout?.blocks
+  if (!layout || width <= 0 || height <= 0 || !rawBlocks?.length) return ''
+
+  type Scored = { text: string; cx: number; cy: number; h: number; w: number }
+  const candidates: Scored[] = []
+  let amount: Scored | null = null
+  for (const block of rawBlocks) {
+    const text = compactPartyKey(block.text)
+    if (!text) continue
+    const scored: Scored = {
+      text,
+      cx: block.x + block.w / 2,
+      cy: block.y + block.h / 2,
+      h: block.h,
+      w: block.w,
+    }
+    const amountHit = parseEmbeddedAmount(text) || parseAmountLine(text)
+    if (amountHit && (!amount || block.h > amount.h)) amount = scored
+    if (!isRejectedLayoutParty(text)) candidates.push(scored)
+  }
+
+  const counts = new Map<string, number>()
+  for (const item of candidates) {
+    counts.set(item.text, (counts.get(item.text) ?? 0) + 1)
+  }
+
+  let bestText = ''
+  let bestScore = 0
+  const seen = new Set<string>()
+  for (const item of candidates) {
+    if (seen.has(item.text)) continue
+    seen.add(item.text)
+    let score = 0
+    if ((counts.get(item.text) ?? 1) >= 2) score += 4
+    if (item.cy / height < 0.42) score += 2
+    if (item.h / height >= 0.02) score += 2
+    if (item.h / height >= 0.035) score += 1
+    if (Math.abs(item.cx / width - 0.5) < 0.28) score += 1
+    // 导航栏也在金额上方，用间距区分：紧挨金额加分，贴页顶减分。
+    if (item.cy / height < 0.11) score -= 6
+    if (amount && item.cy < amount.cy) {
+      const gap = (amount.cy - item.cy) / height
+      if (gap < 0.08) score += 5
+      else if (gap < 0.16) score += 3
+      else if (gap < 0.28) score += 1
+    }
+    if ((item.text.match(/[\u4e00-\u9fff]/g) ?? []).length >= 2) score += 1
+    if (/\*+|店$/.test(item.text)) score += 2
+    if (score > bestScore) {
+      bestScore = score
+      bestText = item.text
+    }
+  }
+  // 低于阈值多半是随手点到的杂字，宁可不填。
+  if (bestScore < 5) return ''
+  return bestText.slice(0, 40)
+}
+
+function applyLayoutParty(
+  parsed: ParsedNotification,
+  text: string,
+  layout?: OcrLayoutHint | null,
+): ParsedNotification {
+  const guessed = guessPartyFromOcrLayout(layout)
+  if (!guessed || !textMentionsParty(text, guessed)) return parsed
+  const current = parsed.counterpart.trim()
+  // 全称 + 版式店招同时在：对方用店招，全称进备注（对齐支付宝 CSV）。
+  if (isLegalPayeeName(current) && isStorefrontName(guessed, current)) {
+    parsed.note = noteWithLegalName(parsed.note, current)
+    parsed.counterpart = guessed
+    return parsed
+  }
+  const labeled = hasPayeeLabel(text) && current && !isWeakParty(current)
+  if (labeled) return parsed
+  parsed.counterpart = guessed
+  return parsed
+}
+
 const VOUCHER_LABEL = /微信支付凭证|支付宝(?:支付)?凭证|支付凭证|付款凭证/
 const SKIP_PARTY_LINE =
-  /^(微信支付凭证|支付宝|支付成功|付款成功|交易成功|使用.+支付|当前状态|交易时间|支付方式|收款凭证|转账凭证|粘贴的通知|系统通知)$/
+  /^(微信支付凭证|支付宝|支付成功|付款成功|交易成功|退款成功|使用.+支付|当前状态|交易时间|支付时间|支付方式|付款方式|退款方式|收款凭证|转账凭证|商户全称|商户名称|收单机构|交易单号|商户单号|粘贴的通知|系统通知|OCR识图)$/
 
 type BillFieldKey =
   | 'paidAt'
   | 'payMethod'
   | 'goods'
   | 'payeeFull'
+  | 'acquirer'
   | 'orderNo'
   | 'merchantOrderNo'
   | 'category'
@@ -333,11 +603,16 @@ const BILL_FIELD_LABELS: Record<string, BillFieldKey> = {
   创建时间: 'paidAt',
   付款方式: 'payMethod',
   支付方式: 'payMethod',
+  退款方式: 'payMethod',
   商品说明: 'goods',
   商品: 'goods',
   收款方全称: 'payeeFull',
+  收款方名称: 'payeeFull',
+  商户全称: 'payeeFull',
+  商户名称: 'payeeFull',
   收款方: 'payeeFull',
   收款人: 'payeeFull',
+  收单机构: 'acquirer',
   订单号: 'orderNo',
   交易订单号: 'orderNo',
   交易单号: 'orderNo',
@@ -364,17 +639,25 @@ function parseAmountLine(line: string): { fen: number; sign: -1 | 0 | 1 } | null
   return null
 }
 
+/**
+ * 微信凭证常见「支付15元，当前状态」，金额嵌在句子里，不能当独立金额行。
+ */
+function parseEmbeddedAmount(line: string): { fen: number; sign: -1 | 0 | 1 } | null {
+  const direct = parseAmountLine(line)
+  if (direct) return direct
+  const pay = line.match(/(?:支付|付款|消费)\s*[¥￥]?\s*(\d+(?:\.\d{1,2})?)\s*元/)
+  if (pay?.[1]) return { fen: yuanToFen(Number(pay[1])), sign: 0 }
+  return null
+}
+
 function parseRefundHint(line: string): number | null {
   const match = line.match(/已退款[（(]?\s*[¥￥]?\s*(\d+(?:\.\d{1,2})?)/)
   return match?.[1] ? yuanToFen(Number(match[1])) : null
 }
 
 function isChromeLine(line: string): boolean {
-  return (
-    /^(关联记录|查看关联记录|账单管理|账单详情|更多|标签|投诉|申请电子回单|对订单有疑问|联系商家|查看|账单)$/.test(
-      line,
-    ) || /本月.+类目|看看花在哪里|花在哪里了/.test(line)
-  )
+  const t = stripNavPrefix(line)
+  return CHROME_EXACT.test(t) || /本月.+类目|看看花在哪里|花在哪里了|账单详/.test(t)
 }
 
 function isLongDigitId(line: string): boolean {
@@ -430,7 +713,7 @@ function tryParseBillDetail(
   }
   for (let i = 0; i < lines.length; i += 1) {
     if (consumed.has(i) || isChromeLine(lines[i] ?? '')) continue
-    const amount = parseAmountLine(lines[i] ?? '')
+    const amount = parseEmbeddedAmount(lines[i] ?? '')
     if (!amount) continue
     amountFen = amount.fen
     amountSign = amount.sign
@@ -439,35 +722,55 @@ function tryParseBillDetail(
   }
   if (!amountFen) return null
 
-  let counterpart = ''
-  for (let i = 0; i < lines.length; i += 1) {
-    if (consumed.has(i)) continue
-    const line = lines[i] ?? ''
-    if (
-      isChromeLine(line) ||
-      parseAmountLine(line) ||
-      isLongDigitId(line) ||
-      BILL_FIELD_LABELS[line] ||
-      /^(粘贴的通知|系统通知)$/.test(line)
-    ) {
-      continue
-    }
-    const party = cleanParty(line).slice(0, 40)
-    if (party && !isBrandParty(party)) {
-      counterpart = party
-      break
+  /**
+   * 标签下一行经常是「账单管理」；先找执照全称，再用重复出现的短店招当对方。
+   * 否则 OCR 会把「8联系商家」、状态栏时间当成对方。
+   */
+  const labeledPayee = cleanParty(fields.payeeFull ?? '').slice(0, 40)
+  const legalName = isLegalPayeeName(labeledPayee) ? labeledPayee : findLegalPayeeInLines(lines)
+  const storefront = legalName
+    ? findStorefrontAlias(lines, legalName, [
+        fields.payMethod ?? '',
+        fields.goods ?? '',
+        fields.category ?? '',
+        fields.orderNo ?? '',
+      ])
+    : ''
+  let counterpart = storefront || (!isWeakParty(labeledPayee) ? labeledPayee : '')
+  if (!counterpart) {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (consumed.has(i)) continue
+      const line = lines[i] ?? ''
+      if (
+        isChromeLine(line) ||
+        isRejectedLayoutParty(line) ||
+        parseEmbeddedAmount(line) ||
+        isLongDigitId(line) ||
+        BILL_FIELD_LABELS[line] ||
+        SKIP_PARTY_LINE.test(line) ||
+        /^(粘贴的通知|系统通知)$/.test(line)
+      ) {
+        continue
+      }
+      const party = cleanParty(line).slice(0, 40)
+      if (party && !isWeakParty(party)) {
+        counterpart = party
+        break
+      }
     }
   }
-  if (!counterpart) counterpart = (fields.payeeFull ?? '').slice(0, 40)
+  if (!counterpart && legalName) counterpart = legalName
 
   const joined = lines.join(' ')
-  const kind = parseNotifyType(joined, amountSign || (fields.payMethod ? -1 : 0))
+  const kind = parseNotifyType(joined, amountSign)
   const paidAt = fields.paidAt ? parseFlexibleDate(fields.paidAt) : null
   const noteBits = [
     fields.payMethod,
-    fields.goods && !isLongDigitId(fields.goods) ? fields.goods : '',
+    legalName && storefront ? `全称${legalName}` : '',
+    fields.goods && !isLongDigitId(fields.goods) && !/^退款[-—]?\d/.test(fields.goods) ? fields.goods : '',
   ].filter(Boolean)
-  const relatedRefundFen = kind.type === 'expense' && refundFen > 0 ? refundFen : 0
+  const isRefund = kind.isRefund
+  const relatedRefundFen = !isRefund && kind.type === 'expense' && refundFen > 0 ? refundFen : 0
 
   return {
     source: sourceFromPackage(packageName, joined),
@@ -480,14 +783,21 @@ function tryParseBillDetail(
     orderNo: fields.orderNo ?? '',
     categoryHint: fields.category ?? '',
     relatedRefundFen,
+    isRefund,
   }
 }
 
 function parseNotifyParty(text: string, lines: string[]): string {
+  const partyStop =
+    '(?:收单机构|支付方式|付款方式|交易单号|商户单号|商家订单号|商品说明|支付时间|交易时间|账单分类|当前状态)'
   const patterns = [
+    /([\u4e00-\u9fffA-Za-z0-9_*]{1,20})退款\s*[¥￥]?\d+(?:\.\d{1,2})?\s*元?/,
     /(?:向|给|付款给|转账给|支付给)([\u4e00-\u9fffA-Za-z0-9_* .]{1,40}?)(?:付款|转账|支付|成功|¥|￥|$)/,
     /(?:来自|已收款[，,]?来自|收款人[：:])([\u4e00-\u9fffA-Za-z0-9_* .]{1,40})/,
-    /(?:商户|商家)(?:名称)?[：:]?\s*([\u4e00-\u9fffA-Za-z0-9_* .]{1,40})/,
+    new RegExp(
+      `(?:商户全称|商户名称|商家名称|商家全称|收款方全称)[：:]?\\s*([\\u4e00-\\u9fffA-Za-z0-9_*]{2,40}?)(?=\\s+${partyStop}|$)`,
+    ),
+    /(?:商户|商家|收款方)[：:]\s*([\u4e00-\u9fffA-Za-z0-9_* .]{1,40})/,
     /【([^】]{1,40})】/,
     new RegExp(`^(.{1,40}?)\\s*(?:${VOUCHER_LABEL.source})`),
     new RegExp(`(?:${VOUCHER_LABEL.source})\\s+(.{1,40}?)(?:\\s+(?:使用.+支付|¥|￥)|$)`),
@@ -495,16 +805,25 @@ function parseNotifyParty(text: string, lines: string[]): string {
   for (const re of patterns) {
     const match = text.match(re)
     const party = match?.[1] ? cleanParty(match[1]) : ''
-    if (party && !isBrandParty(party) && !SKIP_PARTY_LINE.test(party)) return party
+    if (party && !isWeakParty(party) && !SKIP_PARTY_LINE.test(party)) return party
   }
   for (const line of lines) {
     const stripped = line.replace(new RegExp(`^(?:${VOUCHER_LABEL.source})\\s*`), '').trim()
-    if (!stripped || SKIP_PARTY_LINE.test(stripped) || /^[¥￥]?\s*\d+(?:\.\d{1,2})?\s*元?$/.test(stripped)) {
+    if (
+      !stripped ||
+      SKIP_PARTY_LINE.test(stripped) ||
+      isChromeLine(stripped) ||
+      isRejectedLayoutParty(stripped) ||
+      parseEmbeddedAmount(stripped) ||
+      /^[¥￥]?\s*\d+(?:\.\d{1,2})?\s*元?$/.test(stripped)
+    ) {
       continue
     }
     if (isBrandParty(stripped)) continue
     const party = cleanParty(stripped).slice(0, 40)
-    if (party && !VOUCHER_LABEL.test(party)) return party
+    if (party && !isWeakParty(party) && !VOUCHER_LABEL.test(party) && !SKIP_PARTY_LINE.test(party)) {
+      return party
+    }
   }
   return ''
 }
@@ -512,17 +831,19 @@ function parseNotifyParty(text: string, lines: string[]): string {
 /**
  * 从系统通知或粘贴文案里抽出金额、对方、时间、收支类型和来源。
  * 账单详情走标签/下一行；付款通知走短句。失败的字段留空，入账前仍以待确认列表为准。
+ * `layout` 仅 OCR 识图有：标签抽不到对方时，按行框猜头像旁店名。
  */
 export function parseNotificationText(
   text: string,
   postedAt = new Date(),
   packageName = '',
+  layout?: OcrLayoutHint | null,
 ): ParsedNotification | null {
   const lines = splitCopyLines(text)
   const compact = (lines.join(' ') || text.replace(/\s+/g, ' ')).trim()
   if (!compact) return null
   const bill = tryParseBillDetail(lines, postedAt, packageName)
-  if (bill) return bill
+  if (bill) return applyLayoutParty(bill, text, layout)
   const signed =
     compact.match(/(?:^|\s)([+-])[¥￥]?\s*(\d+(?:\.\d{1,2})?)(?:\s|$)/) ||
     compact.match(/[¥￥]\s*([+-])\s*(\d+(?:\.\d{1,2})?)/)
@@ -536,16 +857,21 @@ export function parseNotificationText(
   const amountFen = yuanToFen(Number(amountText))
   const amountSign: -1 | 0 | 1 = signed?.[1] === '-' ? -1 : signed?.[1] === '+' ? 1 : 0
   const kind = parseNotifyType(compact, amountSign)
-  return {
-    source: sourceFromPackage(packageName, compact),
-    type: kind.type,
-    amountFen,
-    counterpart: parseNotifyParty(compact, lines),
-    occurredAt: parseNotifyTime(compact, postedAt),
-    note: compact.slice(0, 80),
-    excludedFromBudget: kind.excludedFromBudget,
-    orderNo: '',
-    categoryHint: '',
-    relatedRefundFen: 0,
-  }
+  return applyLayoutParty(
+    {
+      source: sourceFromPackage(packageName, compact),
+      type: kind.type,
+      amountFen,
+      counterpart: parseNotifyParty(compact, lines),
+      occurredAt: parseNotifyTime(compact, postedAt),
+      note: compact.slice(0, 80),
+      excludedFromBudget: kind.excludedFromBudget,
+      orderNo: '',
+      categoryHint: '',
+      relatedRefundFen: 0,
+      isRefund: kind.isRefund,
+    },
+    text,
+    layout,
+  )
 }

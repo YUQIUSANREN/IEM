@@ -28,6 +28,7 @@ export const useAppStore = defineStore('app', () => {
   const showRecord = ref(false)
   const editingTx = ref<Transaction | null>(null)
   const showCategories = ref(false)
+  const showCalibrate = ref(false)
   const dataRev = ref(0)
   const bookBalanceFen = ref(0)
   /** 全量流水。卡片只窗口渲染，盘点/搜索都用这份，不再触底向库追加。 */
@@ -56,12 +57,19 @@ export const useAppStore = defineStore('app', () => {
     transactions.value = listTransactions('')
     const choices = listSelectablePeriods(startDay, transactions.value)
     const liveStart = getPeriodByDate(new Date(), startDay).startIso
-    const stillValid = choices.some((item) => item.startIso === selectedPeriodStartIso.value)
-    if (!selectedPeriodStartIso.value || !stillValid) {
-      selectedPeriodStartIso.value = liveStart
-    }
-    const match = choices.find((item) => item.startIso === selectedPeriodStartIso.value)
-    dashboard.value = buildDashboard(match?.start ?? new Date())
+    const selected = selectedPeriodStartIso.value
+    const listed = choices.find((item) => item.startIso === selected)
+    /**
+     * 日历点选可能落到「没有流水」的周期，下拉列表里没有这一档。
+     * 只要仍是合法周期起点就保留，避免刷新后弹回本周期。
+     */
+    const fromIso = selected ? getPeriodByDate(new Date(selected), startDay) : null
+    const keep = listed ?? (fromIso && fromIso.startIso === selected ? fromIso : null)
+    if (!keep) selectedPeriodStartIso.value = liveStart
+    const match =
+      choices.find((item) => item.startIso === selectedPeriodStartIso.value) ??
+      getPeriodByDate(new Date(selectedPeriodStartIso.value), startDay)
+    dashboard.value = buildDashboard(match.start)
     categories.value = listCategories()
     onboarded.value = isOnboarded()
     bookBalanceFen.value = getBookBalance()
@@ -86,6 +94,14 @@ export const useAppStore = defineStore('app', () => {
     showCategories.value = false
   }
 
+  function openCalibrate(): void {
+    showCalibrate.value = true
+  }
+
+  function closeCalibrate(): void {
+    showCalibrate.value = false
+  }
+
   function selectPeriod(startIso: string): void {
     selectedPeriodStartIso.value = startIso
     refreshDashboard()
@@ -107,6 +123,7 @@ export const useAppStore = defineStore('app', () => {
     showRecord,
     editingTx,
     showCategories,
+    showCalibrate,
     dataRev,
     bookBalanceFen,
     transactions,
@@ -119,6 +136,8 @@ export const useAppStore = defineStore('app', () => {
     closeRecord,
     openCategories,
     closeCategories,
+    openCalibrate,
+    closeCalibrate,
   }
 })
 

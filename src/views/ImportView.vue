@@ -16,9 +16,17 @@ import {
   setInboxStatus,
   undoImportBatch,
 } from '../domain/engine'
-import { parseBillFile, parseEml, parseNotificationText, composeNotifyText } from '../import/bills'
+import {
+  parseBillFile,
+  parseEml,
+  parseNotificationText,
+  composeNotifyText,
+  isPlaceholderInboxTitle,
+  type OcrLayoutHint,
+} from '../import/bills'
 import { startDirectoryWatch } from '../platform/watch'
-import { isMobileApp } from '../platform/env'
+import { isMobileApp, isTauri } from '../platform/env'
+import { recognizeImageFile, type OcrResult } from '../platform/ocr'
 import {
   drainNotifyQueue,
   isNotificationListenerEnabled,
@@ -34,7 +42,7 @@ import FileDropzone from '../components/FileDropzone.vue'
 const store = useAppStore()
 const router = useRouter()
 const mobile = isMobileApp()
-const tab = ref<'file' | 'watch' | 'notify' | 'email'>('file')
+const tab = ref<'file' | 'watch' | 'notify' | 'ocr' | 'email'>('file')
 const preview = ref<ImportPreviewRow[]>([])
 const fileName = ref('')
 const source = ref<ImportPreviewRow['source']>('manual')
@@ -43,6 +51,12 @@ const watchLabel = ref('')
 const watching = ref(false)
 let stopWatch: (() => void) | null = null
 const pasteText = ref('')
+const ocrText = ref('')
+/** 最近一次识图的行框；用户改字后仍用来猜对方，但店名必须还在正文里。 */
+const ocrLayout = ref<OcrResult | null>(null)
+const ocrBusy = ref(false)
+const pickEl = ref<HTMLInputElement | null>(null)
+const shotEl = ref<HTMLInputElement | null>(null)
 const inbox = ref(listInbox())
 const listenerOn = ref(false)
 const batches = ref(listImportBatches())
@@ -159,6 +173,10 @@ onMounted(() => {
 })
 
 watch(tab, (value) => {
+  if (mobile && value === 'watch') {
+    tab.value = 'file'
+    return
+  }
   if (value === 'notify') void syncNotifyQueue()
 })
 
@@ -235,8 +253,8 @@ async function toggleWatch(): Promise<void> {
   }
 }
 
-function ingestPaste(): void {
-  const parsed = parseNotificationText(pasteText.value)
+function ingestText(text: string, title: string, clear?: () => void, layout?: OcrLayoutHint | null): void {
+  const parsed = parseNotificationText(text, new Date(), '', layout)
   if (!parsed) {
     message.value = '无法从这段文字里识别金额，请手补一笔。'
     toast('error', message.value)
@@ -244,16 +262,60 @@ function ingestPaste(): void {
   }
   try {
     addInboxItem({
-      title: '粘贴的通知',
-      body: pasteText.value,
+      title,
+      body: text,
       sourceGuess: parsed.source,
-      parsedJson: JSON.stringify(parsed),
+      parsedJson: JSON.stringify(
+        layout
+          ? {
+              ...parsed,
+              ocrLayout: {
+                imageWidth: layout.imageWidth,
+                imageHeight: layout.imageHeight,
+                blocks: layout.blocks,
+              },
+            }
+          : parsed,
+      ),
     })
     reloadInbox()
-    pasteText.value = ''
+    clear?.()
     toast('ok', '已放入待确认')
   } catch (error) {
     toast('error', error instanceof Error ? error.message : '放入待确认失败')
+  }
+}
+
+function ingestPaste(): void {
+  ingestText(pasteText.value, '粘贴的通知', () => {
+    pasteText.value = ''
+  })
+}
+
+function ingestOcr(): void {
+  ingestText(ocrText.value, 'OCR识图', undefined, ocrLayout.value)
+}
+
+async function onOcrFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  ocrBusy.value = true
+  message.value = ''
+  ocrLayout.value = null
+  try {
+    const result = await recognizeImageFile(file)
+    ocrText.value = result.text
+    ocrLayout.value = result
+    message.value = '已识别出文字，可改完再放入待确认。'
+    toast('ok', message.value)
+  } catch (error) {
+    const text = error instanceof Error ? error.message : '识别失败'
+    message.value = text
+    toast('error', text)
+  } finally {
+    ocrBusy.value = false
   }
 }
 
@@ -268,14 +330,15 @@ function acceptInbox(id: number): void {
   }
   try {
     const source = parsed.source === 'manual' ? 'notification' : parsed.source
+    const txType = parsed.isRefund ? 'expense' : parsed.type
     const txId = addTransaction({
-      type: parsed.type,
+      type: txType,
       amountFen: parsed.amountFen,
       occurredAt: parsed.occurredAt,
       categoryId: guessInboxCategoryId(
         parsed.note,
         parsed.counterpart,
-        parsed.type,
+        txType,
         store.categories,
         parsed.categoryHint,
         store.transactions,
@@ -284,9 +347,10 @@ function acceptInbox(id: number): void {
       counterpart: parsed.counterpart,
       note: parsed.note,
       orderNo: parsed.orderNo,
-      excludedFromBudget: parsed.excludedFromBudget || parsed.type === 'transfer',
+      excludedFromBudget: parsed.excludedFromBudget || txType === 'transfer',
+      isRefund: parsed.isRefund,
     })
-    if (parsed.relatedRefundFen > 0) {
+    if (parsed.relatedRefundFen > 0 && !parsed.isRefund) {
       addTransaction({
         type: 'expense',
         amountFen: parsed.relatedRefundFen,
@@ -309,7 +373,14 @@ function acceptInbox(id: number): void {
     setInboxStatus(id, 'accepted', txId)
     reloadInbox()
     store.refreshDashboard()
-    toast('ok', parsed.relatedRefundFen > 0 ? '已入账，并记了一笔关联退款' : '已入账')
+    toast(
+      'ok',
+      parsed.isRefund
+        ? '已记为退款（冲减支出）'
+        : parsed.relatedRefundFen > 0
+          ? '已入账，并记了一笔关联退款'
+          : '已入账',
+    )
   } catch (error) {
     toast('error', error instanceof Error ? error.message : '入账失败')
   }
@@ -335,12 +406,30 @@ function inboxStatus(status: string): string {
 type InboxItem = ReturnType<typeof listInbox>[number]
 
 function readInboxParsed(item: InboxItem): ReturnType<typeof parseNotificationText> {
+  let layout: OcrLayoutHint | undefined
+  let storedCounterpart = ''
+  if (item.parsed_json) {
+    try {
+      const stored = JSON.parse(item.parsed_json) as {
+        ocrLayout?: OcrLayoutHint
+        counterpart?: string
+      }
+      layout = stored.ocrLayout
+      storedCounterpart = stored.counterpart?.trim() ?? ''
+    } catch {
+      /* 队列里偶发坏 JSON */
+    }
+  }
   const live = parseNotificationText(
     composeNotifyText(item.title, item.body),
     new Date(item.posted_at),
     item.package_name,
+    layout,
   )
-  if (live) return live
+  if (live) {
+    if (storedCounterpart && !live.counterpart.trim()) live.counterpart = storedCounterpart
+    return live
+  }
   if (item.parsed_json) {
     try {
       const stored = JSON.parse(item.parsed_json) as Partial<NonNullable<ReturnType<typeof parseNotificationText>>>
@@ -356,6 +445,7 @@ function readInboxParsed(item: InboxItem): ReturnType<typeof parseNotificationTe
         orderNo: stored.orderNo ?? '',
         categoryHint: stored.categoryHint ?? '',
         relatedRefundFen: stored.relatedRefundFen ?? 0,
+        isRefund: Boolean(stored.isRefund),
       }
     } catch {
       /* 队列里偶发坏 JSON */
@@ -364,7 +454,12 @@ function readInboxParsed(item: InboxItem): ReturnType<typeof parseNotificationTe
   return null
 }
 
-function inboxKindLabel(type: string | undefined, excluded: boolean | undefined): string {
+function inboxKindLabel(
+  type: string | undefined,
+  excluded: boolean | undefined,
+  isRefund?: boolean,
+): string {
+  if (isRefund) return '退款'
   if (type === 'transfer' || excluded) return '不计收支'
   if (type === 'income') return '收入'
   return '支出'
@@ -382,23 +477,25 @@ function inboxView(item: InboxItem): {
   type: 'expense' | 'income' | 'transfer'
   excludedFromBudget: boolean
   relatedRefundFen: number
+  isRefund: boolean
 } {
   const parsed = readInboxParsed(item)
   const party = parsed?.counterpart.trim()
   const title =
     party ||
-    (item.title.trim() && item.title !== '系统通知' && item.title !== '粘贴的通知'
+    (item.title.trim() && !isPlaceholderInboxTitle(item.title)
       ? item.title.trim()
       : parsed?.note?.slice(0, 24) || '通知')
   return {
     title,
     source: sourceLabel(parsed?.source ?? item.source_guess),
-    kind: inboxKindLabel(parsed?.type, parsed?.excludedFromBudget),
+    kind: inboxKindLabel(parsed?.type, parsed?.excludedFromBudget, parsed?.isRefund),
     occurredAt: parsed?.occurredAt ?? item.posted_at,
     amountFen: parsed?.amountFen ?? null,
     type: parsed?.type ?? 'expense',
     excludedFromBudget: parsed?.excludedFromBudget ?? false,
     relatedRefundFen: parsed?.relatedRefundFen ?? 0,
+    isRefund: Boolean(parsed?.isRefund),
   }
 }
 
@@ -420,8 +517,16 @@ const inboxRows = computed(() =>
     <div class="tabs">
       <button class="tab" :class="{ active: tab === 'file' }" @click="tab = 'file'">文件</button>
       <button class="tab" :class="{ active: tab === 'notify' }" @click="tab = 'notify'">通知</button>
+      <button class="tab" :class="{ active: tab === 'ocr' }" @click="tab = 'ocr'">OCR识图</button>
       <button class="tab" :class="{ active: tab === 'email' }" @click="tab = 'email'">邮件</button>
-      <button class="tab" :class="{ active: tab === 'watch' }" @click="tab = 'watch'">目录监控</button>
+      <button
+        v-if="!mobile"
+        class="tab"
+        :class="{ active: tab === 'watch' }"
+        @click="tab = 'watch'"
+      >
+        目录监控
+      </button>
     </div>
 
     <FileDropzone
@@ -456,9 +561,59 @@ const inboxRows = computed(() =>
       />
       <div class="row">
         <button class="btn" @click="ingestPaste">放入待确认</button>
+        <button v-if="inboxRows.length && tab === 'notify'" class="btn ghost" type="button" @click="clearInboxList">清空列表</button>
+      </div>
+    </article>
+
+    <article v-if="tab === 'ocr'" class="card">
+      <h2>OCR识图</h2>
+      <p class="muted">
+        选一张账单截图或当场拍照，用系统识字抽出文字，再按通知同一套规则放入待确认。
+        没有商户标签时会按版式猜对方，放入前请核对。
+        {{ isTauri() ? '识别在本机完成，不上传图片。轻量级OCR，识别结果可能会存在误差，请仔细核对。' : '浏览器没有系统 OCR，请用 Windows 或 Android 版 IEM。' }}
+      </p>
+      <input
+        ref="pickEl"
+        class="file-hide"
+        type="file"
+        accept="image/*"
+        @change="onOcrFile"
+      />
+      <input
+        ref="shotEl"
+        class="file-hide"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        @change="onOcrFile"
+      />
+      <div class="row">
+        <button class="btn" type="button" :disabled="ocrBusy" @click="pickEl?.click()">
+          {{ ocrBusy ? '识别中…' : '选图' }}
+        </button>
+        <button
+          class="btn secondary"
+          type="button"
+          :disabled="ocrBusy"
+          @click="shotEl?.click()"
+        >
+          拍照
+        </button>
+      </div>
+      <textarea
+        v-model="ocrText"
+        rows="8"
+        :disabled="ocrBusy"
+        placeholder="识别出的文字会出现在这里，可改完再放入待确认"
+      />
+      <div class="row">
+        <button class="btn" type="button" :disabled="ocrBusy || !ocrText.trim()" @click="ingestOcr">放入待确认</button>
         <button v-if="inboxRows.length" class="btn ghost" type="button" @click="clearInboxList">清空列表</button>
       </div>
-      <div v-if="inboxRows.length" class="preview-list">
+    </article>
+
+    <article v-if="(tab === 'notify' || tab === 'ocr') && inboxRows.length" class="card">
+      <div class="preview-list">
         <div
           v-for="row in inboxRows"
           :key="row.item.id"
@@ -485,9 +640,13 @@ const inboxRows = computed(() =>
           <div class="tx-side">
             <div
               class="tx-amt"
-              :class="row.amountFen == null ? 'neutral' : amountClass(row.type, row.excludedFromBudget)"
+              :class="row.amountFen == null ? 'neutral' : amountClass(row.type, row.excludedFromBudget, row.isRefund)"
             >
-              {{ row.amountFen == null ? '—' : formatTxAmount(row.amountFen, row.type, row.excludedFromBudget) }}
+              {{
+                row.amountFen == null
+                  ? '—'
+                  : formatTxAmount(row.amountFen, row.type, row.excludedFromBudget, row.isRefund)
+              }}
             </div>
             <div v-if="row.item.status === 'pending'" class="tx-actions inbox-actions">
               <button class="btn ghost inbox-skip" type="button" @click="ignoreInbox(row.item.id)">忽略</button>
@@ -509,20 +668,13 @@ const inboxRows = computed(() =>
       />
     </article>
 
-    <article v-if="tab === 'watch'" class="card">
+    <article v-if="!mobile && tab === 'watch'" class="card">
       <h2>监控下载目录</h2>
-      <template v-if="mobile">
-        <p class="muted">
-          手机系统不允许应用持续监视下载文件夹，点开始也会失败。日常请用「通知」自动记账；对账时到「文件」里选支付宝/微信/工行账单即可。
-        </p>
-      </template>
-      <template v-else>
-        <p class="muted">授权一个文件夹后，新出现的账单会自动进入预览。网页请用 Chrome 或 Edge。</p>
-        <div class="row">
-          <button class="btn" @click="toggleWatch">{{ watching ? '停止监控' : '选择并开始监控' }}</button>
-          <span class="muted">{{ watchLabel }}</span>
-        </div>
-      </template>
+      <p class="muted">授权一个文件夹后，新出现的账单会自动进入预览。网页请用 Chrome 或 Edge。</p>
+      <div class="row">
+        <button class="btn" @click="toggleWatch">{{ watching ? '停止监控' : '选择并开始监控' }}</button>
+        <span class="muted">{{ watchLabel }}</span>
+      </div>
     </article>
 
     <p v-if="message" class="banner info">{{ message }}</p>
@@ -671,8 +823,12 @@ const inboxRows = computed(() =>
   }
 }
 
-.preview-list {
-  margin-top: 4px;
+.file-hide {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
 }
 
 .preview-head {

@@ -147,8 +147,17 @@ export function listSelectablePeriods(
   return [...seen.values()].sort((a, b) => (a.startIso < b.startIso ? 1 : -1))
 }
 
+/**
+ * 账单和粘贴文案里的时间。微信凭证常用「2026年8月10日 08:48:28」，dayjs 默认解析不了中文月日。
+ */
 export function parseFlexibleDate(text: string): Date | null {
   const raw = text.trim().replace(/\//g, '-')
+  const cn = raw.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日(?:\s+(\d{1,2}:\d{2}(?::\d{2})?))?/)
+  if (cn?.[1] && cn?.[2] && cn?.[3]) {
+    const iso = `${cn[1]}-${pad(Number(cn[2]))}-${pad(Number(cn[3]))}${cn[4] ? ` ${cn[4]}` : ''}`
+    const parsedCn = dayjs(iso)
+    if (parsedCn.isValid()) return parsedCn.toDate()
+  }
   const parsed = dayjs(raw)
   if (!parsed.isValid()) return null
   return parsed.toDate()

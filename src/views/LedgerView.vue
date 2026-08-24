@@ -6,7 +6,7 @@ import { deleteTransaction } from '../domain/engine'
 import { useLedgerFeed } from '../composables/useLedgerFeed'
 import { isCompactLayout, onCompactChange } from '../ui/layout'
 import TxDayCards from '../components/TxDayCards.vue'
-import { toast, trySave } from '../ui/toast'
+import { trySave } from '../ui/toast'
 import { askConfirm } from '../ui/confirm'
 
 const store = useAppStore()
@@ -42,10 +42,7 @@ function consumeFocus(): void {
   feed.keyword = ''
   const found = feed.items.some((tx) => tx.occurredAt.slice(0, 10) === day)
   if (route.query.day) void router.replace({ name: 'ledger' })
-  if (!found) {
-    toast('info', `${day.slice(5).replace('-', '.')} 没有流水`)
-    return
-  }
+  if (!found) return
   window.clearTimeout(flashTimer)
   focusDate.value = day
   flashTimer = window.setTimeout(() => {
@@ -208,12 +205,13 @@ html:not(.is-mobile) .ledger :deep(.day-card) {
 /**
  * 贴右边、记一笔 FAB 上方。
  * 滚动时半圆收进右缘，停稳后展开成「返回顶部」胶囊。
+ * 与 FAB 的间距同样大于「删除」字高，中间也能点到最后几条的删除。
  */
 .back-top {
   display: none;
   position: fixed;
   right: 0;
-  bottom: calc(22px + 64px + 56px + 16px + env(safe-area-inset-bottom));
+  bottom: calc(40px + 64px + 10px + 56px + 40px + env(safe-area-inset-bottom));
   z-index: 21;
   height: 52px;
   padding: 6px 14px 6px 10px;

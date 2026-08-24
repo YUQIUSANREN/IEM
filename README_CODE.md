@@ -18,7 +18,7 @@
 | `dist/` | `vite build` 产物，不必手改 |
 | `index.html` | Web 入口 |
 | `vite.config.ts` / `package.json` | 构建与依赖 |
-| `GUIDE.md` | 使用说明（与指南页内容对应） |
+| `GUIDE.md` | 使用说明（应用内指南和首次引导只读这一份） |
 
 `node_modules/`、`src-tauri/target/`、`src-tauri/gen/` 是依赖和编译产物。
 
@@ -29,9 +29,10 @@
 ```
 src/
 ├── main.ts              启动：主题、布局、Pinia、路由
-├── App.vue              根组件：开机、引导、记一笔弹层、Toast
+├── App.vue              根组件：开机、引导、记一笔弹层、Toast、更新说明
 ├── style.css            全局主题色、按钮、吸顶栏等
 ├── types.ts             流水、限额、导入等类型
+├── release.ts           用户可见版本号与更新说明文案
 ├── router/index.ts      Hash 路由
 │
 ├── views/               一页一个路由
@@ -43,7 +44,7 @@ src/
 ├── platform/            网页 vs App 的差异
 ├── ui/                  主题、窄屏、Toast
 ├── composables/         列表过滤等
-└── guides/content.ts    指南卡片文案
+└── guides/content.ts    从 GUIDE.md 解析指南卡片
 ```
 
 ### 路由 `router/index.ts`
@@ -71,7 +72,7 @@ Hash 模式（`/#/ledger` 这类）。`AppShell` 包住主界面：
 |---|---|
 | `HomeView.vue` | 账面余额、周期 KPI、限额进度 |
 | `LedgerView.vue` | 按天卡片、搜索、回到顶部 |
-| `ImportView.vue` | 文件 / 目录监控 / 通知 / 邮件 |
+| `ImportView.vue` | 文件 / 通知 / OCR / 邮件；目录监控仅电脑 |
 | `ReportView.vue` | 周期盘点与图表 |
 | `SettingsView.vue` | 外观、备份、清空、入口 |
 | `BudgetView.vue` | 周期起始日与限额 |
@@ -94,6 +95,7 @@ Hash 模式（`/#/ledger` 这类）。`AppShell` 包住主界面：
 | `ThemePicker.vue` | 外观 |
 | `NiceSelect.vue` / `WheelPicker.vue` | 选择器 |
 | `ToastHost.vue` / `NavIcon.vue` / `TxPager.vue` | 提示、导航图标、分页 |
+| `ChangelogHost.vue` / `ConfirmHost.vue` | 更新说明弹层、确认框 |
 
 ### 状态 `stores/app.ts`
 
@@ -106,6 +108,7 @@ Hash 模式（`/#/ledger` 这类）。`AppShell` 包住主界面：
 | 文件 | 职责 |
 |---|---|
 | `engine.ts` | 增删改流水、限额、导入提交、余额、备份导出 |
+| `changelog.ts` | 本机是否已看过当前版更新说明 |
 | `period.ts` | 周期起止（默认每月 16 日切） |
 | `money.ts` | 元 / 分 |
 | `dedupe.ts` | 导入去重 |
@@ -136,12 +139,13 @@ Hash 模式（`/#/ledger` 这类）。`AppShell` 包住主界面：
 - `theme.ts`：宣纸 / 墨夜 / 潮蓝 / 朱泥
 - `layout.ts`：窄屏或手机 App 加上 `html.is-mobile`
 - `toast.ts`：轻提示
+- `changelog.ts`：升级后弹一次最新更新说明
 - `useLedgerFeed.ts`：账本搜索（数据已在内存）
 - `usePagedTransactions.ts`：实验室等分页
 
 ### 指南 `guides/content.ts`
 
-`GuideView` 的卡片文案；`id: 'file'` 对应「导入支付宝 / 微信 / 工行账单」。导入页「导出指引」会跳到这一张。
+从仓库根目录 `GUIDE.md` 解析卡片。改说明只改 `GUIDE.md`。`id: 'file'` 对应「导入支付宝 / 微信 / 工行文件」，导入页「导出指引」会跳到这一张。手机端会去掉「目录监控」那一节。
 
 ---
 
@@ -158,6 +162,55 @@ src-tauri/
 ```
 
 前端用 `@tauri-apps/api` 和 fs / dialog 插件。Android 通知由 Kotlin 写入队列，前端再 drain。
+
+---
+
+## 版本号与更新日志（发版时改）
+
+用户能看到的版本串来自 `IEM根目录\src\release.ts` 里 **CHANGELOG 第一条** 的 `version`（当前 **`0.2.0`**）。打包用的号还要在 npm / Tauri / Cargo 里写成同一串。不要改依赖库自己的 version，也不要改 `Cargo.toml` 里的 `rust-version`（那是 Rust 编译器最低版本）。
+
+新用户：先走完首次指南，进入账本后再弹**当前这一版**的说明。老用户：版本号变了才弹一次。设置 → 关于里可以随时翻全部历史。点「知道了」或点遮罩即记下「这版看过了」，同一版本不再弹。
+
+### 必须手改（四处同一串，例如 `0.2.0` → `0.2.0`）
+
+| 路径 | 改什么 | 作用 |
+|---|---|---|
+| `IEM根目录\src\release.ts` | 在 `CHANGELOG` **最上面**加一条：`version`、`date`、若干条用户能感知的 `notes` | 应用内「关于」列表、升级弹窗文案，以及设置页显示的版本号 |
+| `IEM根目录\package.json` | 顶层 `"version"` | npm / 网页包版本 |
+| `IEM根目录\src-tauri\tauri.conf.json` | 顶层 `"version"` | Windows 安装包、Android `versionName`；打包时还会据此生成 Android `versionCode` |
+| `IEM根目录\src-tauri\Cargo.toml` | `[package]` 下的 `version` | Rust 壳 crate 版本 |
+
+不要改 `SettingsView.vue` 里的版本数字，它读 `APP_VERSION`。
+
+### 更新说明怎么写
+
+- 只写用户能觉察的变化（新入口、行为变了、要重新授权）。重构、依赖升级、内部警告不要写。
+- 新的一条放在数组**最前面**，旧的不要删。
+- 弹窗只取第一条（当前版）。从 0.1 跳到 0.3 也只弹 0.3。
+- 3～7 条为宜，用短句，不要贴 git commit。
+- `version` 必须和上面三个配置文件里的号相同，否则界面是新号、安装包仍是旧号（或反过来）。
+
+### 会跟着变、一般不用手改
+
+| 路径 | 说明 |
+|---|---|
+| `IEM根目录\package-lock.json` | 文件开头 `"version"` 和 `packages.""` 里的 `"version"`。改完 `package.json` 后跑一次 `npm install` 会对齐；也可两处手改成同一串 |
+| `IEM根目录\src-tauri\Cargo.lock` | 搜 `name = "iem"` 那一段的 `version`。下次 `cargo` / `tauri` 编译会自动改 |
+
+Android 工程 `IEM根目录\src-tauri\gen\android\app\build.gradle.kts` 从打包时生成的 `tauri.properties` 读 `versionName` / `versionCode`，**不要手改 gradle**。覆盖安装 APK 时系统看的是 `versionCode`（随 `tauri.conf.json` 的主.次.修订递增）；只加功能不升这个号，手机上可能装不上或仍显示旧版。
+
+### 文档里若写了具体版本
+
+`IEM根目录\README.md` 实验室说明已改成「连点版本号」，一般不必跟着改数字。若别处文档又写死了版本串，发版时一并改掉。
+
+### 建议步骤
+
+1. 定新号（semver：修 bug 升最后一位，有功能升中间位）。
+2. 在 `src\release.ts` 最上面加一条更新说明，`version` 写成新号。
+3. 把 `package.json`、`tauri.conf.json`、`Cargo.toml` 改成同一串。
+4. 跑 `npm install`（或手改 lock）；编译一次桌面或 Android，让 `Cargo.lock` 跟上。
+5. 再打包。Windows 用 `npm run tauri:build`；Android 签好的包在 `IEM根目录\dist-android\IEM.apk`。
+6. 打开应用：设置 → 关于，确认版本号和新说明都在；用旧数据升级安装时，应弹出当前这一版（不是全部历史）。
 
 ---
 

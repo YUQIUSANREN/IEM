@@ -2,6 +2,7 @@
 //! Rust 侧负责文件系统、目录选择和系统通知权限，避免再维护一套数据库。
 
 mod notify_bridge;
+mod ocr;
 
 use tauri::Manager;
 
@@ -17,11 +18,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(notify_bridge::init())
+        .plugin(ocr::init())
         .invoke_handler(tauri::generate_handler![
             ping,
             notify_bridge::drain_notify_queue,
             notify_bridge::notification_listener_enabled,
-            notify_bridge::open_notification_listener_settings
+            notify_bridge::open_notification_listener_settings,
+            ocr::ocr_recognize
         ])
         .setup(|app| {
             let _ = app.path().app_data_dir().map(|dir| {

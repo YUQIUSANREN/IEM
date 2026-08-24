@@ -356,13 +356,48 @@ npx tauri android build     # 输出 APK / AAB
 .\build-android-apk.ps1     # 编译并签名，输出 dist-android\IEM.apk（也可双击 build-android-apk.bat）
 ```
 
+发版时改版本号和更新说明，见下一节。
+
 开发自测（不面向使用者）：
 - 网页 / 桌面：设置里不放入口，浏览器打开 `#/lab`
-- 手机：设置 → 关于 → 连点「版本 0.1.0」7 次露出入口，再输口令 `114514`（本次会话有效，杀进程后要再点再输）
+- 手机：设置 → 关于 → 连点「版本」那一行 7 次露出入口，再输口令 `114514`（本次会话有效，杀进程后要再点再输）
 
 ---
 
-## 7. 目录
+## 7. 发版：版本号与更新日志
+
+用户能看到的版本和「更新说明」写在 `IEM根目录\src\release.ts`。弹窗只显示**当前这一版**；设置 → 关于里可以翻历史。新用户先走完首次指南，进入账本后再弹最新说明。
+
+### 每次发版要做的
+
+1. 定新号（例如 `0.2.0` → `0.2.0`）。修 bug 升最后一位，有功能升中间位。
+2. 打开 `IEM根目录\src\release.ts`，在 `CHANGELOG` **最上面**加一条，例如：
+
+```ts
+{
+  version: '0.2.0',
+  date: '2026-09-01',
+  notes: [
+    '导入页增加 OCR 识图',
+    '记一笔按钮的加号改为居中',
+  ],
+},
+```
+
+   只写用户能觉察的变化，3～7 条短句。旧条目不要删。`version` 必须和下面三个文件里的号相同。
+3. 把同一串号改到：
+   - `IEM根目录\package.json` 顶层 `"version"`
+   - `IEM根目录\src-tauri\tauri.conf.json` 顶层 `"version"`
+   - `IEM根目录\src-tauri\Cargo.toml` 里 `[package]` 的 `version`
+4. 跑一次 `npm install`（对齐 `package-lock.json`），再编译一次桌面或 Android（对齐 `Cargo.lock`）。
+5. 打包。Windows：`npm run tauri:build`。Android 签好的包：`IEM根目录\dist-android\IEM.apk`。
+6. 打开应用：设置 → 关于，核对版本号和新说明。用旧数据覆盖安装时，应弹出当前这一版。
+
+不要手改 `SettingsView.vue` 里的版本（它读 `release.ts`），也不要改 `src-tauri\gen\android\` 里的 gradle。更细的说明见 `README_CODE.md` 的「版本号与更新日志」。
+
+---
+
+## 8. 目录
 
 - `src/` Vue 3 + TypeScript 界面与账本逻辑
 - `src-tauri/` Tauri 桌面/移动壳
@@ -375,6 +410,6 @@ npx tauri android build     # 输出 APK / AAB
 
 ---
 
-## 8. 安全边界
+## 9. 安全边界
 
 不会模拟登录支付宝、微信或网银，也不会抓取未授权接口。导入只处理你提供的官方导出文件、邮件附件、系统通知或粘贴文本。

@@ -563,8 +563,8 @@ label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
   display: grid;
   grid-template-columns: 44px 1fr 44px;
   align-items: center;
-  /* 与整页 --app-pad-top 对齐，再多 8px，避免 × 贴状态栏 */
-  padding: calc(8px + var(--app-pad-top, 16px)) 8px 0;
+  /* 安全区之上再留 38px（原 8px + 30px），让 × 和标题离开状态栏再看一版 */
+  padding: calc(38px + var(--app-pad-top, 16px)) 8px 0;
 }
 .composer-head h2 {
   margin: 0;

@@ -1,18 +1,19 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
-import { setBookBalance } from '../domain/engine'
-import { formatYuan, parseYuanInput } from '../domain/money'
-import { formatRemainFen } from '../domain/tx-display'
+import { formatYuan } from '../domain/money'
 import PeriodSelect from '../components/PeriodSelect.vue'
+import MonthCashCalendar from '../components/MonthCashCalendar.vue'
+import OverviewPulseCard from '../components/OverviewPulseCard.vue'
 import TxDayCards from '../components/TxDayCards.vue'
-import { toast, trySave } from '../ui/toast'
 
 const store = useAppStore()
 const router = useRouter()
-const calibrating = ref(false)
-const calibrateInput = ref('')
+const pageEl = ref<HTMLElement | null>(null)
+/** 下滑后大标题换成小字居中吸顶，和设置页同一套。 */
+const titleCollapsed = ref(false)
+let scrollRoot: HTMLElement | null = null
 
 const recent = computed(() => {
   const { startIso, endIso } = store.dashboard.period
@@ -27,98 +28,65 @@ const ratio = computed(() => {
   return Math.min(dash.value.spentFen / limit, 1.5)
 })
 
-function openCalibrate(): void {
-  calibrateInput.value = formatYuan(store.bookBalanceFen)
-  calibrating.value = true
+/**
+ * 页面本身不滚，真正的滚动容器是 AppShell 的 `.main`。
+ */
+function findScrollRoot(el: HTMLElement): HTMLElement | null {
+  let current: HTMLElement | null = el.parentElement
+  while (current) {
+    const { overflowY } = getComputedStyle(current)
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') return current
+    current = current.parentElement
+  }
+  return document.querySelector<HTMLElement>('main.main')
 }
 
-function saveCalibrate(): void {
-  const fen = parseYuanInput(calibrateInput.value)
-  if (fen === null) {
-    toast('error', '请输入有效金额')
+function onHomeScroll(): void {
+  titleCollapsed.value = (scrollRoot?.scrollTop ?? 0) > 20
+}
+
+function bindTitleCollapse(): void {
+  scrollRoot?.removeEventListener('scroll', onHomeScroll)
+  scrollRoot = pageEl.value ? findScrollRoot(pageEl.value) : document.querySelector<HTMLElement>('main.main')
+  if (!scrollRoot) {
+    titleCollapsed.value = false
     return
   }
-  if (!trySave(() => setBookBalance(fen), '账面余额已校准')) return
-  calibrating.value = false
-  store.refreshDashboard()
+  scrollRoot.addEventListener('scroll', onHomeScroll, { passive: true })
+  onHomeScroll()
 }
+
+onMounted(() => {
+  bindTitleCollapse()
+})
+
+onUnmounted(() => {
+  scrollRoot?.removeEventListener('scroll', onHomeScroll)
+})
 </script>
 
 <template>
-  <section class="page">
-    <header class="head">
-      <div>
+  <section ref="pageEl" class="page pin-page">
+    <header class="head pin-bar" :class="{ collapsed: titleCollapsed }">
+      <div class="head-copy">
         <p class="muted">{{ dash.isCurrentPeriod ? '当前周期' : '历史 / 其他周期' }}</p>
-        <h1>{{ dash.period.label }}</h1>
+        <h1>
+          <span class="title-large">{{ dash.period.label }}</span>
+          <span class="title-mini" :aria-hidden="!titleCollapsed">{{ dash.period.label }}</span>
+        </h1>
       </div>
-      <PeriodSelect :model-value="store.selectedPeriodStartIso" @update:model-value="store.selectPeriod" />
+      <PeriodSelect
+        class="head-pick"
+        :model-value="store.selectedPeriodStartIso"
+        @update:model-value="store.selectPeriod"
+      />
     </header>
 
-    <article class="card balance">
-      <div>
-        <div class="muted">账面余额</div>
-        <div class="num">{{ formatYuan(store.bookBalanceFen) }}</div>
-        <p class="muted">随收入增加、随支出减少。点校准可按实际现金/账户合计改到正确数字，不改已记流水。</p>
-      </div>
-      <button class="btn secondary" @click="openCalibrate">校准余额</button>
-    </article>
-
-    <div v-if="calibrating" class="modal-mask" @click.self="calibrating = false">
-      <div class="modal">
-        <h2>校准账面余额</h2>
-        <p class="muted">输入此刻你实际持有的资金合计（现金 + 支付宝 + 微信 + 银行卡等）。差额只会调整锚点。</p>
-        <input v-model="calibrateInput" class="input" inputmode="decimal" />
-        <div class="row">
-          <button class="btn save" @click="saveCalibrate">保存账面余额</button>
-          <button class="btn secondary" @click="calibrating = false">取消</button>
-        </div>
-      </div>
-    </div>
+    <OverviewPulseCard />
 
     <div v-for="alert in dash.alerts" :key="alert.title" class="banner" :class="alert.level">
       <strong>{{ alert.title }}</strong>
       <div>{{ alert.detail }}</div>
-    </div>
-
-    <div class="kpi">
-      <article class="card">
-        <div class="muted">周期支出</div>
-        <div class="num">{{ formatYuan(dash.spentFen) }}</div>
-      </article>
-      <article class="card">
-        <div class="muted">剩余</div>
-        <div class="num" :class="{ seal: dash.policy && dash.remainingFen < 0 }">
-          {{ dash.policy ? formatRemainFen(dash.remainingFen) : '未设' }}
-        </div>
-        <div class="muted">
-          <template v-if="dash.policy">
-            {{ dash.incomeCountsTowardBudget ? '额度' : '限额' }} {{ formatYuan(dash.effectiveLimitFen) }}
-            <template v-if="dash.incomeCountsTowardBudget">
-              · 基础 {{ formatYuan(dash.policy.totalLimitFen) }} + 收入
-            </template>
-          </template>
-          <template v-else>到「限额」页设定后才会计算</template>
-        </div>
-      </article>
-      <article class="card">
-        <div class="kpi-head">
-          <div class="muted">{{ dash.isCurrentPeriod ? '今日可用' : '该周期日均' }}</div>
-          <div v-if="dash.policy && dash.isCurrentPeriod" class="muted share">日限额 {{ formatYuan(dash.morningShareFen) }}</div>
-        </div>
-        <div class="num" :class="{ seal: dash.todayOverspent }">{{ dash.policy ? formatYuan(dash.todayAllowanceFen) : '--' }}</div>
-        <div class="muted">
-          <template v-if="dash.isCurrentPeriod">
-            今日已花 {{ formatYuan(dash.todaySpentFen) }}
-            <template v-if="dash.incomeCountsTowardBudget"> · 今日收入 {{ formatYuan(dash.todayIncomeFen) }}</template>
-            · 剩 {{ dash.remainingDays }} 天
-          </template>
-          <template v-else>按该周期完整天数折算</template>
-        </div>
-      </article>
-      <article class="card">
-        <div class="muted">周期收入</div>
-        <div class="num moss">{{ formatYuan(dash.incomeFen) }}</div>
-      </article>
     </div>
 
     <article class="card">
@@ -141,6 +109,8 @@ function saveCalibrate(): void {
       </div>
     </article>
 
+    <MonthCashCalendar />
+
     <div>
       <div class="row">
         <h2>该周期流水</h2>
@@ -153,7 +123,74 @@ function saveCalibrate(): void {
 </template>
 
 <style scoped>
-.head, .balance, .row {
+.head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 0;
+}
+.head:not(.collapsed) {
+  box-shadow:
+    calc(-1 * var(--main-pad-left, 16px)) 0 0 0 var(--paper),
+    var(--main-pad-right, 16px) 0 0 0 var(--paper),
+    0 calc(-1 * var(--main-pad-top, 16px)) 0 0 var(--paper),
+    calc(-1 * var(--main-pad-left, 16px)) calc(-1 * var(--main-pad-top, 16px)) 0 0 var(--paper),
+    var(--main-pad-right, 16px) calc(-1 * var(--main-pad-top, 16px)) 0 0 var(--paper);
+}
+.head.collapsed {
+  display: block;
+  padding-top: 22px;
+  padding-bottom: 14px;
+}
+.head-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.head-copy .muted {
+  margin: 0 0 4px;
+  transition: opacity 0.2s ease;
+}
+.head h1 {
+  position: relative;
+  margin: 0;
+  width: 100%;
+  line-height: 1.25;
+}
+.title-large,
+.title-mini {
+  display: block;
+  transition: opacity 0.2s ease;
+}
+.title-mini {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  font-size: 17px;
+  font-weight: 650;
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.head.collapsed .muted,
+.head.collapsed .title-large { opacity: 0; }
+.head.collapsed .title-mini { opacity: 1; }
+.head.collapsed .head-pick {
+  display: none;
+}
+.head.collapsed .muted {
+  height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+.row {
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -163,25 +200,23 @@ function saveCalibrate(): void {
   max-width: 100%;
 }
 .cat { margin-bottom: 12px; }
-.kpi-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-}
-.share {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.balance .num { font-size: 28px; font-variant-numeric: tabular-nums; }
 .head :deep(.period-select) {
   min-width: 0;
   width: 100%;
   max-width: 100%;
 }
+.head-pick {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 100%;
+}
 /* 不要写成 :global(html.is-mobile) .head —— Vue 会编成 html.is-mobile { display:grid }，整页被挤到左边 */
-html.is-mobile .head {
+html.is-mobile .head:not(.collapsed) {
   display: grid;
+}
+@media (prefers-reduced-motion: reduce) {
+  .title-large,
+  .title-mini,
+  .head-copy .muted { transition: none; }
 }
 </style>

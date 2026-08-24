@@ -20,7 +20,9 @@ import {
 } from '../platform/lab-gate'
 import { toast, trySave, trySaveAsync } from '../ui/toast'
 import { askConfirm } from '../ui/confirm'
+import { formatYuan } from '../domain/money'
 import { readThemeChoice, THEME_OPTIONS } from '../ui/theme'
+import { APP_VERSION, CHANGELOG } from '../release'
 import ThemePicker from '../components/ThemePicker.vue'
 import SettingsGlyph from '../components/SettingsGlyph.vue'
 
@@ -82,7 +84,7 @@ const groups = computed<SettingsRow[][]>(() => {
       { id: 'guide', label: '指南', glyph: 'guide', tint: 'orange' },
       { id: 'backup', label: '备份', glyph: 'backup', tint: 'cyan' },
       { id: 'clear', label: '清空账本', glyph: 'clear', tint: 'red' },
-      { id: 'about', label: '关于', glyph: 'about', tint: 'gray', value: '0.1.0' },
+      { id: 'about', label: '关于', glyph: 'about', tint: 'gray', value: APP_VERSION },
     ],
   ]
   if (labVisible.value) {
@@ -329,6 +331,11 @@ onUnmounted(() => {
           <span class="set-label">周期收支</span>
           <i class="set-chevron" />
         </button>
+        <button class="set-row plain" type="button" @click="store.openCalibrate()">
+          <span class="set-label">校准余额</span>
+          <span class="set-value">{{ formatYuan(store.bookBalanceFen) }}</span>
+          <i class="set-chevron" />
+        </button>
       </article>
     </template>
 
@@ -355,14 +362,26 @@ onUnmounted(() => {
 
     <template v-else-if="pane === 'about'">
       <article class="set-card set-pad about-pane">
-        <p>IEM（Income and Expenditure Management）第一期：手动记账、文件导入、目录监控、通知解析、邮件附件、周期限额、盘点图表。</p>
-        <p class="muted">不会请求支付宝、微信或银行的登录凭证。</p>
+        <p>IEM（Income and Expenditure Management）主要功能：手动记账、文件导入、通知文本和图片解析、邮件附件、周期限额、盘点图表。电脑还可监控下载目录。</p>
+        <p class="muted">当前版本不会产生联网行为，不会请求支付宝、微信或银行的登录凭证。</p>
       </article>
       <article class="set-card">
         <button class="set-row plain about-version" type="button" @click="onAboutVersionTap">
           <span class="set-label">版本</span>
-          <span class="set-value">0.1.0</span>
+          <span class="set-value">{{ APP_VERSION }}</span>
         </button>
+      </article>
+      <article class="set-card set-pad about-log">
+        <h2 class="about-log-title">更新说明</h2>
+        <section v-for="item in CHANGELOG" :key="item.version" class="about-log-block">
+          <p class="about-log-ver">
+            {{ item.version }}
+            <span class="muted">{{ item.date }}</span>
+          </p>
+          <ul>
+            <li v-for="line in item.notes" :key="line">{{ line }}</li>
+          </ul>
+        </section>
       </article>
     </template>
 
@@ -572,6 +591,30 @@ onUnmounted(() => {
 }
 .about-pane p { margin: 0 0 8px; }
 .about-pane p:last-child { margin: 0; }
+.about-log-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.about-log-block + .about-log-block {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.about-log-ver {
+  margin: 0 0 6px;
+  font-weight: 650;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.about-log ul {
+  margin: 0;
+  padding-left: 1.15em;
+  line-height: 1.5;
+}
+.about-log li + li {
+  margin-top: 4px;
+}
 .lab-pane {
   display: grid;
   gap: 12px;
