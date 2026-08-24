@@ -1,0 +1,14 @@
+[[permission]]
+identifier = "allow-drain-notify-queue"
+description = "读取并清空 Android 通知监听队列"
+commands.allow = ["drain_notify_queue"]
+
+[[permission]]
+identifier = "allow-notification-listener-enabled"
+description = "查询系统通知使用权是否已授予 IEM"
+commands.allow = ["notification_listener_enabled"]
+
+[[permission]]
+identifier = "allow-open-notification-listener-settings"
+description = "打开系统通知使用权设置页"
+commands.allow = ["open_notification_listener_settings"]
